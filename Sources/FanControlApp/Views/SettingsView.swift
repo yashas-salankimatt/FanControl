@@ -32,6 +32,13 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Behavior") {
+                Toggle("Reset fans to auto on sleep", isOn: $state.resetOnSleep)
+                Text("When enabled, fans return to macOS automatic control when your Mac sleeps and your preset is re-applied on wake.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Helper Daemon") {
                 HStack {
                     Text("Status")

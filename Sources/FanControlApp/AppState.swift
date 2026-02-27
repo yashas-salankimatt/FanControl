@@ -34,6 +34,9 @@ class AppState: ObservableObject {
     @Published var activePreset: String = UserDefaults.standard.string(forKey: "activePreset") ?? "auto" {
         didSet { UserDefaults.standard.set(activePreset, forKey: "activePreset") }
     }
+    @Published var resetOnSleep: Bool = UserDefaults.standard.object(forKey: "resetOnSleep") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(resetOnSleep, forKey: "resetOnSleep") }
+    }
 
     /// Suppresses activePreset → "custom" when applyPreset() is changing things internally
     private var applyingPreset = false
@@ -47,6 +50,8 @@ class AppState: ObservableObject {
     private var refreshTimer: Timer?
     private var refreshInProgress = false
     private var terminationObserver: Any?
+    private var sleepObserver: Any?
+    private var wakeObserver: Any?
 
     func formatTemp(_ celsius: Double) -> String {
         if useFahrenheit {
@@ -111,6 +116,33 @@ class AppState: ObservableObject {
                 self?.refreshTimer?.invalidate()
                 self?.restoreAutoMode()
                 self?.smc.close()
+            }
+        }
+
+        // Restore auto on sleep, re-apply preset on wake (if enabled)
+        sleepObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.resetOnSleep else { return }
+                self.restoreAutoMode()
+            }
+        }
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.resetOnSleep else { return }
+                if self.activePreset != "custom" {
+                    self.applyPreset(self.activePreset)
+                } else {
+                    self.reapplyManualState()
+                }
             }
         }
 
@@ -400,6 +432,12 @@ class AppState: ObservableObject {
         refreshTimer?.invalidate()
         if let observer = terminationObserver {
             NotificationCenter.default.removeObserver(observer)
+        }
+        if let observer = sleepObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        if let observer = wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
     }
 }

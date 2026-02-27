@@ -18,6 +18,7 @@ A native macOS menu bar app for monitoring and controlling fan speeds on Apple S
 - **Configurable menu bar display** — show max CPU temp, a specific sensor, or icon only
 - **Fahrenheit/Celsius toggle** — all temperatures convert seamlessly
 - **Persistent state** — manual settings, curves, presets, and preferences survive app restarts
+- **Sleep/wake handling** — optionally resets fans to auto on sleep and re-applies your preset on wake
 - **Safe shutdown** — fans automatically return to macOS control when the app quits
 
 ## Architecture
@@ -144,6 +145,7 @@ Or manage from **Settings > Helper Daemon** in the app.
 - Fan curves use linear interpolation between user-defined points
 - The helper daemon uses `KeepAlive` in its LaunchDaemon plist — macOS will restart it if it crashes
 - The app registers for `NSApplication.willTerminateNotification` to restore fans to auto mode on quit
+- Sleep/wake is handled via `NSWorkspace.willSleepNotification` and `didWakeNotification` — configurable in Settings > Behavior
 - State persistence uses UserDefaults (settings, manual state) and a JSON file in `~/Library/Application Support/FanControl/` (curves)
 
 ## License

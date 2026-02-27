@@ -1,0 +1,7 @@
+.build/
+.swiftpm/
+FanControl.app/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+.DS_Store

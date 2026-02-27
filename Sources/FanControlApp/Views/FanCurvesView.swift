@@ -309,13 +309,13 @@ struct FanCurveEditorView: View {
                     }
                 } else {
                     Section("Curve Points") {
-                        ForEach(Array(points.enumerated()), id: \.element.id) { index, point in
+                        ForEach($points) { $point in
                             HStack {
                                 Text("Temp:")
                                     .font(.caption)
                                 TextField(unitLabel, value: Binding(
-                                    get: { toDisplay(points[index].temperature) },
-                                    set: { points[index].temperature = toCelsius($0) }
+                                    get: { toDisplay(point.temperature) },
+                                    set: { point.temperature = toCelsius($0) }
                                 ), format: .number.precision(.fractionLength(0)))
                                 .frame(width: 55)
                                 .textFieldStyle(.roundedBorder)
@@ -327,8 +327,8 @@ struct FanCurveEditorView: View {
                                 Text("Speed:")
                                     .font(.caption)
                                 TextField("%", value: Binding(
-                                    get: { points[index].fanSpeedPercent },
-                                    set: { points[index].fanSpeedPercent = max(0, min(100, $0)) }
+                                    get: { point.fanSpeedPercent },
+                                    set: { point.fanSpeedPercent = max(0, min(100, $0)) }
                                 ), format: .number.precision(.fractionLength(0)))
                                 .frame(width: 50)
                                 .textFieldStyle(.roundedBorder)
@@ -340,7 +340,7 @@ struct FanCurveEditorView: View {
 
                                 if points.count > 2 {
                                     Button(role: .destructive) {
-                                        points.remove(at: index)
+                                        points.removeAll { $0.id == point.id }
                                     } label: {
                                         Image(systemName: "minus.circle")
                                     }

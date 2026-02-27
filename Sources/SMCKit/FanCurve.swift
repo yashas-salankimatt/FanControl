@@ -76,7 +76,9 @@ public struct FanCurveConfig: Codable, Identifiable, Sendable {
             let p1 = sorted[i]
             let p2 = sorted[i + 1]
             if temperature >= p1.temperature && temperature <= p2.temperature {
-                let ratio = (temperature - p1.temperature) / (p2.temperature - p1.temperature)
+                let range = p2.temperature - p1.temperature
+                guard range > 0 else { return p1.fanSpeedPercent }
+                let ratio = (temperature - p1.temperature) / range
                 return p1.fanSpeedPercent + ratio * (p2.fanSpeedPercent - p1.fanSpeedPercent)
             }
         }
@@ -105,7 +107,11 @@ public class FanCurveStore {
     }
 
     public func save(_ curves: [FanCurveConfig]) {
-        guard let data = try? JSONEncoder().encode(curves) else { return }
-        try? data.write(to: fileURL)
+        do {
+            let data = try JSONEncoder().encode(curves)
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            fputs("FanControl: Failed to save curves: \(error.localizedDescription)\n", stderr)
+        }
     }
 }

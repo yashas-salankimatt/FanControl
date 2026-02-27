@@ -45,7 +45,11 @@ public func readExact(fd: Int32, count: Int) -> Data? {
     var totalRead = 0
     while totalRead < count {
         let n = read(fd, &buffer[totalRead], count - totalRead)
-        if n <= 0 { return nil }
+        if n < 0 {
+            if errno == EINTR { continue }
+            return nil
+        }
+        if n == 0 { return nil }  // EOF
         totalRead += n
     }
     return Data(buffer)
@@ -55,7 +59,7 @@ public func readExact(fd: Int32, count: Int) -> Data? {
 public func readFrame<T: Decodable>(fd: Int32, as type: T.Type) -> T? {
     guard let lenData = readExact(fd: fd, count: 4) else { return nil }
     let length = lenData.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-    guard length > 0, length < 1_000_000 else { return nil }
+    guard length > 0, length < 4096 else { return nil }
     guard let jsonData = readExact(fd: fd, count: Int(length)) else { return nil }
     return try? JSONDecoder().decode(type, from: jsonData)
 }
@@ -68,7 +72,11 @@ public func writeFrame<T: Encodable>(fd: Int32, value: T) -> Bool {
         var totalWritten = 0
         while totalWritten < frame.count {
             let n = write(fd, ptr + totalWritten, frame.count - totalWritten)
-            if n <= 0 { return false }
+            if n < 0 {
+                if errno == EINTR { continue }
+                return false
+            }
+            if n == 0 { return false }
             totalWritten += n
         }
         return true

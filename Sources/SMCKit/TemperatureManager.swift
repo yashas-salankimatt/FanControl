@@ -120,8 +120,8 @@ public class TemperatureManager {
             // Filter to reasonable temperature values (-20 to 150 °C)
             guard temp > -20 && temp < 150 else { continue }
 
-            // Skip values that are exactly 0 (usually inactive/unused sensors)
-            guard temp != 0 else { continue }
+            // Skip values near zero (usually inactive/unused sensors)
+            guard abs(temp) > 0.5 else { continue }
 
             let name = Self.knownSensors[keyStr] ?? keyStr
             let typeStr = fourCCString(value.dataType)

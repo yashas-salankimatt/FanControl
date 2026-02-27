@@ -136,10 +136,19 @@ public struct SMCValue {
 public class SMCConnection {
     private var connection: io_connect_t = 0
     private var isOpen = false
+    private let lock = NSRecursiveLock()
 
     public init() {}
 
     public func open() throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if isOpen {
+            IOServiceClose(connection)
+            isOpen = false
+        }
+
         let service = IOServiceGetMatchingService(
             kIOMainPortDefault,
             IOServiceMatching("AppleSMC")
@@ -159,6 +168,8 @@ public class SMCConnection {
     }
 
     public func close() {
+        lock.lock()
+        defer { lock.unlock() }
         if isOpen {
             IOServiceClose(connection)
             isOpen = false
@@ -172,6 +183,9 @@ public class SMCConnection {
     // MARK: - Low-level
 
     private func callSMC(_ input: inout SMCParamStruct) throws -> SMCParamStruct {
+        lock.lock()
+        defer { lock.unlock() }
+
         guard isOpen else { throw SMCError.notOpen }
 
         var output = SMCParamStruct()
@@ -275,16 +289,19 @@ public class SMCConnection {
             // Little-endian byte order for floats on Apple Silicon
             bytes = [UInt8(raw & 0xFF), UInt8((raw >> 8) & 0xFF), UInt8((raw >> 16) & 0xFF), UInt8(raw >> 24)]
         case "fpe2":
-            let raw = UInt16(max(0, value) * 4.0)
+            let clamped = max(0, min(16383, value))
+            let raw = UInt16(clamped * 4.0)
             bytes = [UInt8(raw >> 8), UInt8(raw & 0xFF)]
         case "sp78":
-            let raw = Int16(value * 256.0)
+            let clamped = max(-128, min(127, value))
+            let raw = Int16(clamped * 256.0)
             let uraw = UInt16(bitPattern: raw)
             bytes = [UInt8(uraw >> 8), UInt8(uraw & 0xFF)]
         case "ui8 ":
             bytes = [UInt8(max(0, min(255, value)))]
         case "ui16":
-            let raw = UInt16(max(0, value))
+            let clamped = max(0, min(65535, value))
+            let raw = UInt16(clamped)
             bytes = [UInt8(raw >> 8), UInt8(raw & 0xFF)]
         default:
             throw SMCError.unsupportedDataType(typeStr)

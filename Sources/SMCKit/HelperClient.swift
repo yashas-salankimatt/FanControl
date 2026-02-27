@@ -6,6 +6,7 @@ import Darwin
 /// Client for communicating with the FanControlHelper privileged daemon.
 public class HelperClient {
     private var fd: Int32 = -1
+    private let lock = NSLock()
 
     public init() {}
 
@@ -26,8 +27,9 @@ public class HelperClient {
         addr.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = helperSocketPath.utf8CString
         withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-            ptr.withMemoryRebound(to: CChar.self, capacity: Int(104)) { dest in
-                for i in 0..<min(pathBytes.count, 104) {
+            let capacity = MemoryLayout.size(ofValue: ptr.pointee)
+            ptr.withMemoryRebound(to: CChar.self, capacity: capacity) { dest in
+                for i in 0..<min(pathBytes.count, capacity) {
                     dest[i] = pathBytes[i]
                 }
             }
@@ -45,6 +47,10 @@ public class HelperClient {
             return false
         }
 
+        // Prevent SIGPIPE on broken socket — get EPIPE error instead
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+
         // Set timeouts
         var tv = timeval(tv_sec: 3, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
@@ -61,7 +67,11 @@ public class HelperClient {
     }
 
     /// Send a command to the helper and get the response.
+    /// Thread-safe — serializes concurrent calls.
     public func send(_ command: HelperCommand) -> HelperResponse {
+        lock.lock()
+        defer { lock.unlock() }
+
         // Connect fresh for each command (simple and reliable)
         guard connect() else {
             return .fail("Cannot connect to helper daemon. Is it installed?")

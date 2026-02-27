@@ -12,8 +12,15 @@ import Darwin
 
 let smc = SMCConnection()
 var fanManager: FanManager!
+var fanCount: Int = 0
+
+/// Serial queue to serialize all SMC access (SMCConnection is not reentrant)
+let smcQueue = DispatchQueue(label: "com.fancontrol.helper.smc")
 
 // MARK: - Main entry
+
+// Ignore SIGPIPE — handle EPIPE from write() instead of crashing
+signal(SIGPIPE, SIG_IGN)
 
 fputs("FanControl Helper starting (pid \(getpid()))...\n", stderr)
 
@@ -27,19 +34,32 @@ do {
 
 fanManager = FanManager(smc: smc)
 
-// Signal handling
-signal(SIGTERM) { _ in
+// Read fan count once at startup for input validation
+fanCount = (try? fanManager.getFanCount()) ?? 0
+fputs("Detected \(fanCount) fan(s).\n", stderr)
+
+// Signal handling via DispatchSource (async-signal-safe)
+let sigTermSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: smcQueue)
+sigTermSource.setEventHandler {
+    fputs("Received SIGTERM, restoring auto mode...\n", stderr)
     try? fanManager.setAllAutoMode()
     smc.close()
     unlink(helperSocketPath)
     Foundation.exit(0)
 }
-signal(SIGINT) { _ in
+sigTermSource.resume()
+signal(SIGTERM, SIG_IGN)
+
+let sigIntSource = DispatchSource.makeSignalSource(signal: SIGINT, queue: smcQueue)
+sigIntSource.setEventHandler {
+    fputs("Received SIGINT, restoring auto mode...\n", stderr)
     try? fanManager.setAllAutoMode()
     smc.close()
     unlink(helperSocketPath)
     Foundation.exit(0)
 }
+sigIntSource.resume()
+signal(SIGINT, SIG_IGN)
 
 // MARK: - Socket server
 
@@ -57,8 +77,9 @@ func createListeningSocket() -> Int32 {
     addr.sun_family = sa_family_t(AF_UNIX)
     let pathBytes = helperSocketPath.utf8CString
     withUnsafeMutablePointer(to: &addr.sun_path) { ptr in
-        ptr.withMemoryRebound(to: CChar.self, capacity: Int(104)) { dest in
-            for i in 0..<min(pathBytes.count, 104) {
+        let capacity = MemoryLayout.size(ofValue: ptr.pointee)
+        ptr.withMemoryRebound(to: CChar.self, capacity: capacity) { dest in
+            for i in 0..<min(pathBytes.count, capacity) {
                 dest[i] = pathBytes[i]
             }
         }
@@ -76,8 +97,9 @@ func createListeningSocket() -> Int32 {
         Foundation.exit(1)
     }
 
-    // Allow non-root users to connect
-    chmod(helperSocketPath, 0o666)
+    // Restrict socket to root:staff (console users on macOS are in the staff group)
+    chown(helperSocketPath, 0, 20)  // root:staff (GID 20 = staff on macOS)
+    chmod(helperSocketPath, 0o660)
 
     guard listen(fd, 5) == 0 else {
         fputs("Failed to listen: \(String(cString: strerror(errno)))\n", stderr)
@@ -88,45 +110,58 @@ func createListeningSocket() -> Int32 {
     return fd
 }
 
+func validateFanIndex(_ index: Int) -> HelperResponse? {
+    guard index >= 0 && index < fanCount else {
+        return .fail("Invalid fan index \(index) (have \(fanCount) fans)")
+    }
+    return nil
+}
+
 func handleCommand(_ command: HelperCommand) -> HelperResponse {
-    switch command {
-    case .ping:
-        return .ok()
+    // Serialize all SMC access
+    return smcQueue.sync {
+        switch command {
+        case .ping:
+            return .ok()
 
-    case .setFanMode(let fanIndex, let manual):
-        do {
-            if manual {
-                try smc.writeValue("F\(fanIndex)Md", value: 1)
-            } else {
-                try smc.writeValue("F\(fanIndex)Md", value: 0)
+        case .setFanMode(let fanIndex, let manual):
+            if let err = validateFanIndex(fanIndex) { return err }
+            do {
+                if manual {
+                    try smc.writeValue("F\(fanIndex)Md", value: 1)
+                } else {
+                    try smc.writeValue("F\(fanIndex)Md", value: 0)
+                }
+                return .ok()
+            } catch {
+                return .fail(error.localizedDescription)
             }
-            return .ok()
-        } catch {
-            return .fail(error.localizedDescription)
-        }
 
-    case .setFanSpeed(let fanIndex, let percentage):
-        do {
-            try fanManager.setFanSpeed(index: fanIndex, percentage: percentage)
-            return .ok()
-        } catch {
-            return .fail(error.localizedDescription)
-        }
+        case .setFanSpeed(let fanIndex, let percentage):
+            if let err = validateFanIndex(fanIndex) { return err }
+            do {
+                try fanManager.setFanSpeed(index: fanIndex, percentage: percentage)
+                return .ok()
+            } catch {
+                return .fail(error.localizedDescription)
+            }
 
-    case .setFanRPM(let fanIndex, let rpm):
-        do {
-            try fanManager.setFanRPM(index: fanIndex, rpm: rpm)
-            return .ok()
-        } catch {
-            return .fail(error.localizedDescription)
-        }
+        case .setFanRPM(let fanIndex, let rpm):
+            if let err = validateFanIndex(fanIndex) { return err }
+            do {
+                try fanManager.setFanRPM(index: fanIndex, rpm: rpm)
+                return .ok()
+            } catch {
+                return .fail(error.localizedDescription)
+            }
 
-    case .setAllAuto:
-        do {
-            try fanManager.setAllAutoMode()
-            return .ok()
-        } catch {
-            return .fail(error.localizedDescription)
+        case .setAllAuto:
+            do {
+                try fanManager.setAllAutoMode()
+                return .ok()
+            } catch {
+                return .fail(error.localizedDescription)
+            }
         }
     }
 }

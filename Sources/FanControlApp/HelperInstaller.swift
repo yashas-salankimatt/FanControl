@@ -3,7 +3,8 @@ import AppKit
 
 /// Handles installing the privileged helper daemon from within the app.
 /// Uses AppleScript `do shell script ... with administrator privileges` for the sudo prompt.
-@MainActor
+/// This class is intentionally NOT @MainActor so install() can run on a background thread
+/// without blocking the UI while the admin dialog is displayed.
 class HelperInstaller {
     static let shared = HelperInstaller()
 
@@ -32,29 +33,44 @@ class HelperInstaller {
         FileManager.default.fileExists(atPath: helperDest)
     }
 
+    /// Escape a string for use inside a single-quoted shell argument.
+    /// Replaces ' with '\'' (end quote, escaped quote, start quote).
+    private func shellEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "'", with: "'\\''")
+    }
+
+    /// Escape a string for embedding inside an AppleScript double-quoted string.
+    /// Escapes backslashes and double quotes.
+    private func appleScriptEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\")
+         .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
     /// Install the helper daemon. Returns nil on success, or an error message.
+    /// This method blocks while the admin dialog is displayed — call from a background thread.
     func install() -> String? {
         guard let helperSrc = bundledHelperPath, let plistSrc = bundledPlistPath else {
             return "Helper binary not found in app bundle. Please rebuild the app."
         }
 
-        // Build the shell script that will run with admin privileges
-        let script = """
-        /bin/mkdir -p /Library/PrivilegedHelperTools && \
-        /bin/cp '\(helperSrc)' '\(helperDest)' && \
-        /usr/sbin/chown root:wheel '\(helperDest)' && \
-        /bin/chmod 755 '\(helperDest)' && \
-        /bin/cp '\(plistSrc)' '\(plistDest)' && \
-        /usr/sbin/chown root:wheel '\(plistDest)' && \
-        /bin/chmod 644 '\(plistDest)' && \
-        /bin/launchctl bootout system/\(plistName) 2>/dev/null; \
-        /bin/launchctl bootstrap system '\(plistDest)'
-        """
+        let escapedHelperSrc = shellEscape(helperSrc)
+        let escapedPlistSrc = shellEscape(plistSrc)
+        let escapedHelperDest = shellEscape(helperDest)
+        let escapedPlistDest = shellEscape(plistDest)
 
-        // Use AppleScript to get the admin password prompt
-        let appleScript = """
-        do shell script "\(script)" with administrator privileges
-        """
+        // Build the shell script that will run with admin privileges
+        let script = "/bin/mkdir -p /Library/PrivilegedHelperTools && " +
+            "/bin/cp '\(escapedHelperSrc)' '\(escapedHelperDest)' && " +
+            "/usr/sbin/chown root:wheel '\(escapedHelperDest)' && " +
+            "/bin/chmod 755 '\(escapedHelperDest)' && " +
+            "/bin/cp '\(escapedPlistSrc)' '\(escapedPlistDest)' && " +
+            "/usr/sbin/chown root:wheel '\(escapedPlistDest)' && " +
+            "/bin/chmod 644 '\(escapedPlistDest)' && " +
+            "/bin/launchctl bootout 'system/\(shellEscape(plistName))' 2>/dev/null; " +
+            "/bin/launchctl bootstrap system '\(escapedPlistDest)'"
+
+        let escapedScript = appleScriptEscape(script)
+        let appleScript = "do shell script \"\(escapedScript)\" with administrator privileges"
 
         var error: NSDictionary?
         let scriptObj = NSAppleScript(source: appleScript)
@@ -62,7 +78,6 @@ class HelperInstaller {
 
         if let error = error {
             let errorMsg = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
-            // User cancelled the auth dialog
             if errorMsg.contains("User canceled") || errorMsg.contains("-128") {
                 return "cancelled"
             }
@@ -74,14 +89,14 @@ class HelperInstaller {
 
     /// Uninstall the helper daemon. Returns nil on success, or an error message.
     func uninstall() -> String? {
-        let script = """
-        /bin/launchctl bootout system/\(plistName) 2>/dev/null; \
-        /bin/rm -f '\(helperDest)' '\(plistDest)' /var/run/fancontrol.sock
-        """
+        let escapedHelperDest = shellEscape(helperDest)
+        let escapedPlistDest = shellEscape(plistDest)
 
-        let appleScript = """
-        do shell script "\(script)" with administrator privileges
-        """
+        let script = "/bin/launchctl bootout 'system/\(shellEscape(plistName))' 2>/dev/null; " +
+            "/bin/rm -f '\(escapedHelperDest)' '\(escapedPlistDest)' /var/run/fancontrol.sock"
+
+        let escapedScript = appleScriptEscape(script)
+        let appleScript = "do shell script \"\(escapedScript)\" with administrator privileges"
 
         var error: NSDictionary?
         let scriptObj = NSAppleScript(source: appleScript)

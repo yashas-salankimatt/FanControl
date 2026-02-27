@@ -45,6 +45,8 @@ class AppState: ObservableObject {
     let helper = HelperClient()
 
     private var refreshTimer: Timer?
+    private var refreshInProgress = false
+    private var terminationObserver: Any?
 
     func formatTemp(_ celsius: Double) -> String {
         if useFahrenheit {
@@ -99,13 +101,17 @@ class AppState: ObservableObject {
         }
         startMonitoring()
 
-        // Restore fans to auto mode on app termination
-        NotificationCenter.default.addObserver(
+        // Clean up on app termination
+        terminationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.restoreAutoMode()
+            MainActor.assumeIsolated {
+                self?.refreshTimer?.invalidate()
+                self?.restoreAutoMode()
+                self?.smc.close()
+            }
         }
 
         // Prompt to install helper if not connected
@@ -128,14 +134,13 @@ class AppState: ObservableObject {
         helperInstalling = true
         defer { helperInstalling = false }
 
-        // Run the install on a background thread (it blocks waiting for the auth dialog)
+        // Run on a background thread — install() blocks while the admin dialog is displayed
         let result: String? = await Task.detached {
-            await HelperInstaller.shared.install()
+            HelperInstaller.shared.install()
         }.value
 
         if let error = result {
             if error == "cancelled" {
-                // User cancelled, don't nag
                 return
             }
             lastError = "Helper install failed: \(error)"
@@ -154,7 +159,7 @@ class AppState: ObservableObject {
         }
     }
 
-    nonisolated func restoreAutoMode() {
+    func restoreAutoMode() {
         if helper.isAvailable {
             _ = helper.setAllAuto()
         } else {
@@ -196,8 +201,11 @@ class AppState: ObservableObject {
     func startMonitoring() {
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.refresh()
-                self?.applyCurves()
+                guard let self, !self.refreshInProgress else { return }
+                self.refreshInProgress = true
+                defer { self.refreshInProgress = false }
+                self.refresh()
+                self.applyCurves()
             }
         }
     }
@@ -366,7 +374,7 @@ class AppState: ObservableObject {
         var fanTargets: [Int: Double] = [:]
 
         for curve in curves where curve.enabled {
-            guard let temp = try? tempManager.readTemperature(curve.temperatureSensorKey) else { continue }
+            guard let temp = temperatures.first(where: { $0.key == curve.temperatureSensorKey })?.temperature else { continue }
             let targetPercent = curve.interpolate(temperature: temp)
 
             for fanIndex in curve.fanIndices {
@@ -390,7 +398,8 @@ class AppState: ObservableObject {
 
     deinit {
         refreshTimer?.invalidate()
-        restoreAutoMode()
-        smc.close()
+        if let observer = terminationObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 }

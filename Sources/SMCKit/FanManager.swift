@@ -13,7 +13,7 @@ public struct FanInfo: Sendable {
 
     public var currentPercent: Double {
         guard maxRPM > minRPM else { return 0 }
-        return ((currentRPM - minRPM) / (maxRPM - minRPM)) * 100.0
+        return max(0, min(100, ((currentRPM - minRPM) / (maxRPM - minRPM)) * 100.0))
     }
 }
 
@@ -70,9 +70,12 @@ public class FanManager {
     }
 
     /// Set fan speed as absolute RPM. Sets fan to forced/manual mode.
+    /// RPM is clamped to the fan's min/max range.
     public func setFanRPM(index: Int, rpm: Double) throws {
+        let info = try getFanInfo(index)
+        let clamped = max(info.minRPM, min(info.maxRPM, rpm))
         try smc.writeValue("F\(index)Md", value: 1)
-        try smc.writeValue("F\(index)Tg", value: rpm)
+        try smc.writeValue("F\(index)Tg", value: clamped)
     }
 
     /// Return fan to automatic (system-managed) mode.

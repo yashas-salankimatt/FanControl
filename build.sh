@@ -23,6 +23,7 @@ mkdir -p "$APP_DIR/Resources"
 
 cp .build/release/FanControlApp "$APP_DIR/MacOS/"
 cp Resources/Info.plist "$APP_DIR/"
+cp Resources/AppIcon.icns "$APP_DIR/Resources/"
 
 # Bundle helper binary and plist inside .app for in-app installation
 echo "Bundling helper daemon into app..."
